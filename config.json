@@ -1,0 +1,47 @@
+{
+  "environment": "local",
+
+  "symbols": ["BTCUSD"],
+
+  "polling_interval_seconds": 10,
+
+  "position_size": 1,
+
+  "breakout": {
+    "candle_resolution": "1h",
+    "lookback_candles": 24
+  },
+
+  "confirmation": {
+    "minutes_after_breakout": 3
+  },
+
+  "rsi": {
+    "enabled": true,
+    "period": 14,
+    "overbought": 70,
+    "oversold": 30
+  },
+
+  "execution": {
+    "use_limit_orders": true,
+    "limit_order_buffer_percentage": 0.03,
+    "max_wait_seconds_for_limit_fill": 5,
+    "max_spread_percentage": 0.1
+  },
+
+  "risk_management": {
+    "stop_loss_percentage": 0.8,
+    "take_profit_percentage": 1.5,
+    "trailing_stop_percentage": 0.4
+  },
+
+  "max_fatal_retries": 20,
+
+  "logging": {
+    "log_dir": "logs",
+    "max_log_size_mb": 10,
+    "backup_count": 3,
+    "colorful_console": true
+  }
+}

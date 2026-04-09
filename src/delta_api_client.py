@@ -11,6 +11,13 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+class FatalAPIError(Exception):
+    """Raised for non-recoverable API errors (401, 403) that should stop retries."""
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        super().__init__(f"Fatal API error ({status_code}): {message}")
+
+
 class OrderType(Enum):
     MARKET = "market_order"
     LIMIT = "limit_order"
@@ -104,6 +111,8 @@ class _DeltaRestClient:
         return resp
 
     def _parse(self, response):
+        if response.status_code in (401, 403):
+            raise FatalAPIError(response.status_code, response.text)
         data = response.json()
         if data.get("success"):
             return data.get("result")
@@ -167,6 +176,8 @@ class DeltaAPIClient:
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 return fn(*args, **kwargs)
+            except FatalAPIError:
+                raise  # 401/403 — do not retry auth failures
             except Exception as e:
                 last_err = e
                 logger.warning("API call failed (attempt %d/%d): %s", attempt, self.MAX_RETRIES, e)

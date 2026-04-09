@@ -2,7 +2,7 @@ import time
 import signal
 import logging
 
-from src.delta_api_client import DeltaAPIClient
+from src.delta_api_client import DeltaAPIClient, FatalAPIError
 from src.data_handler import DataHandler
 from src.indicator_calculator import IndicatorCalculator
 from src.breakout_detector import BreakoutDetector
@@ -43,6 +43,10 @@ class StrategyEngine:
         # Track last processed candle time per symbol to avoid redundant detection
         self._last_processed_candle = {}  # symbol -> candle_time
 
+        # Fatal error tracking: stop bot after N consecutive API failures
+        self._consecutive_api_failures = 0
+        self._max_fatal_retries = config.get("max_fatal_retries", 20)
+
     def run(self):
         """Main strategy loop."""
         self._running = True
@@ -73,8 +77,31 @@ class StrategyEngine:
             for symbol in self.symbols:
                 try:
                     self._process_symbol(symbol)
+                    self._consecutive_api_failures = 0  # reset on success
+                except FatalAPIError as e:
+                    self._consecutive_api_failures += 1
+                    logger.error("[%s] Fatal API error (%d/%d): %s",
+                                 symbol, self._consecutive_api_failures,
+                                 self._max_fatal_retries, e)
+                    if self._consecutive_api_failures >= self._max_fatal_retries:
+                        logger.critical(
+                            "Reached %d consecutive API failures. Stopping bot.",
+                            self._max_fatal_retries,
+                        )
+                        self._running = False
+                        break
                 except Exception as e:
-                    logger.error("[%s] Error in strategy loop: %s", symbol, e, exc_info=True)
+                    self._consecutive_api_failures += 1
+                    logger.error("[%s] Error in strategy loop (%d/%d): %s",
+                                 symbol, self._consecutive_api_failures,
+                                 self._max_fatal_retries, e, exc_info=True)
+                    if self._consecutive_api_failures >= self._max_fatal_retries:
+                        logger.critical(
+                            "Reached %d consecutive API failures. Stopping bot.",
+                            self._max_fatal_retries,
+                        )
+                        self._running = False
+                        break
 
             if self._running:
                 time.sleep(self.poll_interval)
