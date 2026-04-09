@@ -6,45 +6,31 @@ logger = logging.getLogger(__name__)
 
 class ExecutionEngine:
     """
-    Low-slippage execution engine:
+    Execution engine: places market orders at breakout with SL/TP.
     1. Check spread from order book
-    2. Place limit order at breakout_price +/- buffer%
-    3. Wait for fill, cancel + market fallback if not filled
+    2. Place market order immediately
     """
 
     def __init__(self, api_client, config):
         self.api = api_client
         exec_cfg = config.get("execution", {})
-        self.use_limit = exec_cfg.get("use_limit_orders", True)
-        self.buffer_pct = exec_cfg.get("limit_order_buffer_percentage", 0.03) / 100.0
-        self.max_wait = exec_cfg.get("max_wait_seconds_for_limit_fill", 5)
         self.max_spread_pct = exec_cfg.get("max_spread_percentage", 0.1) / 100.0
         self.position_size = config.get("position_size", 1)
 
     def execute_trade(self, symbol, side, breakout_price):
         """
-        Execute a trade with low-slippage logic.
+        Execute a market order at breakout.
         
         Returns fill info dict or None if trade was skipped.
         """
-        logger.info("[%s] Executing %s trade at breakout_price=%.2f", symbol, side, breakout_price)
+        logger.info("[%s] Executing %s market order at breakout_price=%.2f", symbol, side, breakout_price)
 
         # Step 1: Spread check
         if not self._check_spread(symbol):
             return None
 
-        size = self.position_size
-
-        # Step 2: Limit order
-        if self.use_limit:
-            fill = self._try_limit_order(symbol, side, size, breakout_price)
-            if fill:
-                return fill
-            # Step 3: Fallback to market order
-            logger.info("[%s] Limit order not filled, falling back to market order", symbol)
-
-        # Market order (direct or fallback)
-        return self._place_market(symbol, side, size)
+        # Step 2: Market order
+        return self._place_market(symbol, side, self.position_size)
 
     def _check_spread(self, symbol):
         """Check if the bid-ask spread is within acceptable range."""
@@ -81,101 +67,6 @@ class ExecutionEngine:
         except Exception as e:
             logger.error("[%s] Spread check failed: %s", symbol, e)
             return False
-
-    def _try_limit_order(self, symbol, side, size, breakout_price):
-        """Place a limit order and wait for fill."""
-        if side == "buy":
-            limit_price = breakout_price * (1 + self.buffer_pct)
-        else:
-            limit_price = breakout_price * (1 - self.buffer_pct)
-
-        logger.info(
-            "[%s] Placing limit %s order: size=%d price=%.2f",
-            symbol, side, size, limit_price,
-        )
-
-        try:
-            order = self.api.place_limit_order(symbol, side, size, limit_price)
-            order_id = order.get("id")
-
-            if not order_id:
-                logger.error("[%s] Limit order returned no ID: %s", symbol, order)
-                return None
-
-            # Wait for fill
-            fill = self._wait_for_fill(symbol, order_id)
-
-            if fill:
-                return fill
-
-            # Not filled — cancel
-            logger.info("[%s] Cancelling unfilled limit order %s", symbol, order_id)
-            try:
-                self.api.cancel_order(symbol, order_id)
-            except Exception as e:
-                logger.warning("[%s] Cancel failed (may already be filled): %s", symbol, e)
-                # Re-check if it got filled during cancel
-                return self._check_order_filled(symbol, order_id)
-
-            return None
-
-        except Exception as e:
-            logger.error("[%s] Limit order failed: %s", symbol, e)
-            return None
-
-    def _wait_for_fill(self, symbol, order_id):
-        """Poll order status until filled or timeout."""
-        start = time.time()
-        poll_interval = 0.5
-
-        while (time.time() - start) < self.max_wait:
-            try:
-                order = self.api.get_order(order_id)
-                state = order.get("state", "")
-
-                if state in ("closed", "filled"):
-                    fill_price = float(order.get("average_fill_price", order.get("limit_price", 0)))
-                    logger.info(
-                        "[%s] Limit order FILLED: id=%s price=%.2f",
-                        symbol, order_id, fill_price,
-                    )
-                    return {
-                        "order_id": order_id,
-                        "fill_price": fill_price,
-                        "side": order.get("side"),
-                        "size": order.get("size"),
-                        "symbol": symbol,
-                        "type": "limit",
-                    }
-
-                if state in ("cancelled", "rejected"):
-                    logger.warning("[%s] Order %s state=%s", symbol, order_id, state)
-                    return None
-
-            except Exception as e:
-                logger.warning("[%s] Order status check failed: %s", symbol, e)
-
-            time.sleep(poll_interval)
-
-        return None
-
-    def _check_order_filled(self, symbol, order_id):
-        """Check if an order got filled (used after cancel attempt)."""
-        try:
-            order = self.api.get_order(order_id)
-            if order.get("state") in ("closed", "filled"):
-                fill_price = float(order.get("average_fill_price", order.get("limit_price", 0)))
-                return {
-                    "order_id": order_id,
-                    "fill_price": fill_price,
-                    "side": order.get("side"),
-                    "size": order.get("size"),
-                    "symbol": symbol,
-                    "type": "limit",
-                }
-        except Exception:
-            pass
-        return None
 
     def _place_market(self, symbol, side, size):
         """Place a market order as direct execution or fallback."""
@@ -243,3 +134,73 @@ class ExecutionEngine:
         except Exception as e:
             logger.error("[%s] Close position FAILED: %s", symbol, e)
             return None
+
+    def place_stop_loss(self, symbol, side, size, sl_price):
+        """
+        Place a stop-loss order on the exchange for crash protection.
+        side: the side of the POSITION (buy/sell). SL order is the opposite side.
+        """
+        sl_side = "sell" if side == "buy" else "buy"
+        logger.info("[%s] Placing exchange SL: %s size=%d stop_price=%.2f", symbol, sl_side, size, sl_price)
+        try:
+            order = self.api.place_stop_order(
+                symbol, sl_side, size, stop_price=sl_price, reduce_only=True,
+            )
+            order_id = order.get("id")
+            logger.info("[%s] Exchange SL placed: id=%s price=%.2f", symbol, order_id, sl_price)
+            return order_id
+        except Exception as e:
+            logger.error("[%s] Exchange SL placement FAILED: %s", symbol, e)
+            return None
+
+    def update_stop_loss(self, symbol, old_sl_order_id, side, size, new_sl_price):
+        """
+        Update exchange SL by cancelling old and placing new.
+        Returns new SL order ID, or None if failed.
+        """
+        if old_sl_order_id:
+            try:
+                self.api.cancel_order(symbol, old_sl_order_id)
+                logger.info("[%s] Cancelled old exchange SL: %s", symbol, old_sl_order_id)
+            except Exception as e:
+                logger.warning("[%s] Failed to cancel old SL %s: %s", symbol, old_sl_order_id, e)
+
+        return self.place_stop_loss(symbol, side, size, new_sl_price)
+
+    def cancel_stop_loss(self, symbol, sl_order_id):
+        """Cancel an exchange-side stop-loss order."""
+        if not sl_order_id:
+            return
+        try:
+            self.api.cancel_order(symbol, sl_order_id)
+            logger.info("[%s] Exchange SL cancelled: %s", symbol, sl_order_id)
+        except Exception as e:
+            logger.warning("[%s] Failed to cancel exchange SL %s: %s", symbol, sl_order_id, e)
+
+    def place_take_profit(self, symbol, side, size, tp_price):
+        """
+        Place a take-profit order on the exchange.
+        side: the side of the POSITION (buy/sell). TP order is the opposite side.
+        """
+        tp_side = "sell" if side == "buy" else "buy"
+        logger.info("[%s] Placing exchange TP: %s size=%d stop_price=%.2f", symbol, tp_side, size, tp_price)
+        try:
+            order = self.api.place_take_profit_order(
+                symbol, tp_side, size, stop_price=tp_price, reduce_only=True,
+            )
+            order_id = order.get("id")
+            logger.info("[%s] Exchange TP placed: id=%s price=%.2f", symbol, order_id, tp_price)
+            return order_id
+        except Exception as e:
+            logger.error("[%s] Exchange TP placement FAILED: %s", symbol, e)
+            return None
+
+    def cancel_take_profit(self, symbol, tp_order_id):
+        """Cancel an exchange-side take-profit order."""
+        if not tp_order_id:
+            return
+        try:
+            self.api.cancel_order(symbol, tp_order_id)
+            logger.info("[%s] Exchange TP cancelled: %s", symbol, tp_order_id)
+        except Exception as e:
+            logger.warning("[%s] Failed to cancel exchange TP %s: %s", symbol, tp_order_id, e)

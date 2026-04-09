@@ -285,6 +285,26 @@ class DeltaAPIClient:
 
         return self._retry(_place)
 
+    def place_take_profit_order(self, symbol, side, size, stop_price, reduce_only=False):
+        pid = self.get_product_id(symbol)
+        tick = self.get_tick_size(symbol)
+
+        order = {
+            "product_id": pid,
+            "size": int(size),
+            "side": side,
+            "order_type": OrderType.MARKET.value,
+            "stop_order_type": "take_profit_order",
+            "stop_price": str(round_by_tick_size(float(stop_price), tick)),
+            "reduce_only": "true" if reduce_only else "false",
+        }
+
+        def _place():
+            resp = self._client.request("POST", "/v2/orders", payload=order, auth=True)
+            return self._client._parse(resp)
+
+        return self._retry(_place)
+
     def cancel_order(self, symbol, order_id):
         pid = self.get_product_id(symbol)
         payload = {"id": order_id, "product_id": pid}

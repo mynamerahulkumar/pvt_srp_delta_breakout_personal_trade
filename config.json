@@ -13,7 +13,7 @@
   },
 
   "confirmation": {
-    "minutes_after_breakout": 3
+    "minutes_after_breakout": 1
   },
 
   "rsi": {
@@ -24,9 +24,6 @@
   },
 
   "execution": {
-    "use_limit_orders": true,
-    "limit_order_buffer_percentage": 0.03,
-    "max_wait_seconds_for_limit_fill": 5,
     "max_spread_percentage": 0.1
   },
 

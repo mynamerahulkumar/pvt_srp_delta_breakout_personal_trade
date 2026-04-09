@@ -150,12 +150,21 @@ class StrategyEngine:
         """Update trailing stop and check for SL/TP exits."""
         trade = self.trade_manager.get_active_trade(symbol)
 
-        # Update trailing stop
-        self.trade_manager.update_trailing_stop(symbol, current_price)
+        # Update trailing stop — if SL moved, update exchange SL order
+        sl_updated = self.trade_manager.update_trailing_stop(symbol, current_price)
+        if sl_updated:
+            new_sl_id = self.execution.update_stop_loss(
+                symbol, trade.exchange_sl_order_id, trade.side, trade.size, trade.sl_price,
+            )
+            trade.exchange_sl_order_id = new_sl_id
 
         # Check exit conditions
         exit_signal = self.trade_manager.check_exit(symbol, current_price)
         if exit_signal:
+            # Cancel exchange SL and TP before closing (avoid double-close)
+            self.execution.cancel_stop_loss(symbol, trade.exchange_sl_order_id)
+            self.execution.cancel_take_profit(symbol, trade.exchange_tp_order_id)
+
             # Close the position
             result = self.execution.close_position(symbol, trade.side, trade.size)
             if result:
@@ -182,14 +191,7 @@ class StrategyEngine:
         """Detect breakout from candles. Only checks on new candles."""
         candles = self.data_handler.get_candles(symbol)
 
-        # Skip if no new closed candle since last check
-        if candles:
-            latest_time = candles[-1]["time"]
-            if latest_time <= self._last_processed_candle.get(symbol, 0):
-                return
-            self._last_processed_candle[symbol] = latest_time
-
-        # Always show current breakout levels + RSI
+        # Always show current breakout levels + RSI (every poll cycle)
         levels = self.breakout_detector.get_levels(candles, self.lookback_candles)
         if levels:
             mark = None
@@ -222,6 +224,13 @@ class StrategyEngine:
                 f" │ Mark: {mark:.2f}" if mark else "",
                 rsi_str,
             )
+
+        # Skip breakout detection if no new closed candle since last check
+        if candles:
+            latest_time = candles[-1]["time"]
+            if latest_time <= self._last_processed_candle.get(symbol, 0):
+                return
+            self._last_processed_candle[symbol] = latest_time
 
         breakout = self.breakout_detector.detect_breakout(candles, self.lookback_candles)
 
@@ -296,6 +305,14 @@ class StrategyEngine:
             else:
                 sl_price = fill_price * (1 + sl_pct / 100)
                 tp_price = fill_price * (1 - tp_pct / 100)
+
+            # Place exchange-side stop-loss and take-profit for crash protection
+            trade = self.trade_manager.get_active_trade(symbol)
+            if trade:
+                sl_order_id = self.execution.place_stop_loss(symbol, side, size, sl_price)
+                trade.exchange_sl_order_id = sl_order_id
+                tp_order_id = self.execution.place_take_profit(symbol, side, size, tp_price)
+                trade.exchange_tp_order_id = tp_order_id
 
             logger.info("─" * 50)
             logger.info("│  Trade opened  [%s]", symbol)

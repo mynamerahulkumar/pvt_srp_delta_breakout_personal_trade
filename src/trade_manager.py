@@ -16,6 +16,8 @@ class TradeState:
         self.tp_price = tp_price
         self.trailing_pct = trailing_pct / 100.0
         self.order_id = order_id
+        self.exchange_sl_order_id = None  # exchange-side stop-loss order ID
+        self.exchange_tp_order_id = None  # exchange-side take-profit order ID
         self.entry_time = time.time()
         self.highest_price = entry_price  # for LONG trailing
         self.lowest_price = entry_price   # for SHORT trailing
@@ -80,10 +82,11 @@ class TradeManager:
         return trade
 
     def update_trailing_stop(self, symbol, current_price):
-        """Dynamically move SL using trailing stop logic."""
+        """Dynamically move SL using trailing stop logic.
+        Returns True if SL was updated (caller should update exchange SL)."""
         trade = self._trades.get(symbol)
         if not trade:
-            return
+            return False
 
         if trade.side == "buy":
             # Track highest price for LONG
@@ -97,6 +100,7 @@ class TradeManager:
                         "[%s] Trailing SL updated: %.2f -> %.2f (price=%.2f)",
                         symbol, old_sl, new_sl, current_price,
                     )
+                    return True
         else:
             # Track lowest price for SHORT
             if current_price < trade.lowest_price:
@@ -109,6 +113,9 @@ class TradeManager:
                         "[%s] Trailing SL updated: %.2f -> %.2f (price=%.2f)",
                         symbol, old_sl, new_sl, current_price,
                     )
+                    return True
+
+        return False
 
     def check_exit(self, symbol, current_price):
         """
