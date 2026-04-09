@@ -28,8 +28,8 @@
   },
 
   "risk_management": {
-    "stop_loss_percentage": 0.8,
-    "take_profit_percentage": 1.5,
+    "stop_loss_percentage": 2,
+    "take_profit_percentage": 4,
     "trailing_stop_percentage": 0.4
   },
 
