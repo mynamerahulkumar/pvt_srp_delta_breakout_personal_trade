@@ -3,7 +3,7 @@
 
   "symbols": ["BTCUSD"],
 
-  "polling_interval_seconds": 10,
+  "polling_interval_seconds": 30,
 
   "position_size": 1,
 
