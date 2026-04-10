@@ -36,7 +36,6 @@ class ColorFormatter(logging.Formatter):
     KEYWORD_COLORS = [
         ("BREAKOUT DETECTED",  C.BOLD + C.MAGENTA),
         ("Breakout detected",  C.BOLD + C.MAGENTA),
-        ("Levels",             C.BOLD + C.WHITE),
         ("LONG",               C.BOLD + C.GREEN),
         ("SHORT",              C.BOLD + C.RED),
         ("Position closed",    C.BOLD + C.YELLOW),
@@ -51,9 +50,42 @@ class ColorFormatter(logging.Formatter):
         ("│",                  C.BOLD + C.BLUE),
     ]
 
+    # RSI tag colors
+    RSI_TAG_COLORS = {
+        "OVERBOUGHT": C.BOLD + C.RED,
+        "OVERSOLD":   C.BOLD + C.GREEN,
+        "NEUTRAL":    C.BOLD + C.BLUE,
+    }
+
+    def _colorize_levels_line(self, msg):
+        """Apply per-segment colors to the Levels summary line."""
+        import re
+        # Color the symbol in bold white
+        msg = re.sub(r'(\[)([A-Z]+USD)(\])', rf'\1{C.BOLD}{C.CYAN}\2{C.RESET}\3', msg)
+        # Color "Levels (...)" label
+        msg = re.sub(r'(Levels \([^)]+\))', rf'{C.BOLD}{C.WHITE}\1{C.RESET}', msg)
+        # Color "BUY above: <number>" in green
+        msg = re.sub(r'(BUY above: [\d.]+)', rf'{C.BOLD}{C.GREEN}\1{C.RESET}', msg)
+        # Color "SELL below: <number>" in red
+        msg = re.sub(r'(SELL below: [\d.]+)', rf'{C.BOLD}{C.RED}\1{C.RESET}', msg)
+        # Color "Last close: <number>" in yellow
+        msg = re.sub(r'(Last close: [\d.]+)', rf'{C.BOLD}{C.YELLOW}\1{C.RESET}', msg)
+        # Color "Mark: <number>" in magenta
+        msg = re.sub(r'(Mark: [\d.]+)', rf'{C.BOLD}{C.MAGENTA}\1{C.RESET}', msg)
+        # Color RSI value and tag
+        for tag, color in self.RSI_TAG_COLORS.items():
+            msg = re.sub(rf'(RSI\(\d+\): [\d.]+) ({tag})', rf'{C.BOLD}{C.CYAN}\1{C.RESET} {color}\2{C.RESET}', msg)
+        # Color box-drawing chars
+        msg = msg.replace('│', f'{C.DIM}{C.BLUE}│{C.RESET}')
+        return msg
+
     def format(self, record):
         msg = super().format(record)
         text = record.getMessage()
+
+        # Special multi-color formatting for Levels line
+        if "Levels" in text and "BUY above" in text:
+            return self._colorize_levels_line(msg)
 
         # Keyword match first
         for keyword, color in self.KEYWORD_COLORS:
